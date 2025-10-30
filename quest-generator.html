@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta charset="UTF-8">
+<title>German TTRPG Quest Generator</title>
+<style>
+body { max-width: 900px; margin: auto; font-size: 18px; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 16px; }
+p, li { line-height: 1.5em; }
+button { font-size: 18px; min-height: 44px; padding: 12px 16px; margin: 5px; border: 1px solid #ccc; border-radius: 8px; background-color: #f9f9f9; cursor: pointer; }
+button:hover { background-color: #ececec; }
+code { background: #f3f3f3; padding: 2px 6px; border-radius: 4px; }
+small { color: #555; }
+hr { margin: 24px 0; }
+pre { background:#f7f7f7; padding:12px; border-radius:8px; overflow:auto; }
+.bad { color:#b00020 }
+.good { color:#0b7a0b }
+</style>
+</head>
+<body>
+
+<h1>Deutscher Zufallsgenerator (mit Kongruenz)</h1>
+<p>
+Dieser Ein-Datei-Generator erweitert dein Template um eine kleine deutsche <em>Nominalphrasen</em>-Realisierung.
+Damit kannst du Fälle (Nom/Akk/Dat/Gen), Numerus (Sg/Pl), Genus (m/f/n), bestimmte/unklare/keine Artikel
+und Adjektivendungen korrekt beugen – direkt im Browser, offline.
+</p>
+
+<button onclick="generateContent()">Würfeln</button>
+<button onclick="runSelfTests()">Self‑Tests ausführen</button>
+<div id="output"><em>Klicke oben, um Inhalte zu erzeugen…</em></div>
+<div id="tests"></div>
+
+<hr>
+<h2>Wie benutzt man die Flexion?</h2>
+<p>Schreibe in deinen Tabellen <code>[[NP:...]]</code>-Tags. Beispiel:
+<code>[[NP:det=def;case=acc;noun=krieger;adj=tapfer]]</code> ⇒ <em>den tapferen Krieger</em>.
+</p>
+<ul>
+  <li><strong>det</strong>: <code>def</code> (der/die/das), <code>indef</code> (ein/eine/ein/keine), <code>zero</code> (kein Artikel)</li>
+  <li><strong>case</strong>: <code>nom|acc|dat|gen</code></li>
+  <li><strong>num</strong>: <code>sg|pl</code> (Standard: <code>sg</code>)</li>
+  <li><strong>noun</strong>: Lemma-Schlüssel aus dem Lexikon (siehe <code>GERMAN_LEXICON</code>)</li>
+  <li><strong>adj</strong>: (optional) Komma-getrennte Liste: <code>alt, tapfer</code></li>
+  <li><strong>cap</strong>: <code>1</code> um den Anfangsbuchstaben zu groß zu schreiben (default <code>0</code>)</li>
+</ul>
+<p>Mehr Beispiele:</p>
+<ul>
+  <li><code>[[NP:det=indef;case=nom;noun=kriegerin;adj=verwundet]]</code> → <em>eine verwundete Kriegerin</em></li>
+  <li><code>[[NP:det=def;case=dat;num=pl;noun=wache;adj=korrupt]]</code> → <em>den korrupten Wachen</em></li>
+  <li><code>[[NP:det=zero;case=acc;noun=artefakt;adj=uralt,verflucht]]</code> → <em>uraltes verfluchtes Artefakt</em></li>
+</ul>
+
+<hr>
+<h2>Generator-Daten (anpassbar)</h2>
+<p><small>Beispieldaten auf Deutsch – passe beliebig an. Du kannst weiterhin alle Template-Features nutzen
+([[min-max]], {tabellen}, {{wahl|wahl}}, Gewichte ^2, …) und gemischt mit [[NP:…]] verwenden.</small></p>
+
+<script>
+// =====================
+// Konfiguration
+// =====================
+const generatorConfig = {
+  numberOfResults: 10,
+  outputFormat: 'ordered' // 'ordered' | 'unordered' | 'paragraphs'
+};
+
+// =====================
+// Minimal-Lexikon & Flexion
+// =====================
+// Du kannst das Lexikon leicht erweitern. Jeder Eintrag definiert Genus, Pluralform und optionale Eigenheiten.
+const GERMAN_LEXICON = {
+  krieger:    { gender: 'm', plural: 'krieger' },
+  kriegerin:  { gender: 'f', plural: 'kriegerinnen' },
+  magier:     { gender: 'm', plural: 'magier' },
+  hexe:       { gender: 'f', plural: 'hexen' },
+  wache:      { gender: 'f', plural: 'wachen' },
+  bandit:     { gender: 'm', plural: 'banditen' },
+  artefakt:   { gender: 'n', plural: 'artefakte' },
+  relic:      { gender: 'n', plural: 'relikte' },
+  relikt:     { gender: 'n', plural: 'relikte' },
+  hoehle:     { gender: 'f', plural: 'hoehlen', display: 'Höhle', pluralDisplay: 'Höhlen' },
+  wald:       { gender: 'm', plural: 'waelder', display: 'Wald', pluralDisplay: 'Wälder' },
+  stadt:      { gender: 'f', plural: 'staedte', display: 'Stadt', pluralDisplay: 'Städte' },
+  dorf:       { gender: 'n', plural: 'doerfer', display: 'Dorf', pluralDisplay: 'Dörfer' },
+  drache:     { gender: 'm', plural: 'drachen' },
+  goblin:     { gender: 'm', plural: 'goblins' },
+  priester:   { gender: 'm', plural: 'priester' },
+  priesterin: { gender: 'f', plural: 'priesterinnen' },
+  phoenix:    { gender: 'm', plural: 'phoenixe', display: 'Phönix', pluralDisplay: 'Phönixe' }
+};
+
+// Hilfsfunktion: Lemma → Oberflächenform inkl. Umlaute (falls bereitgestellt)
+function displayForm(lemma, num, capitalize=false) {
+  const e = GERMAN_LEXICON[lemma];
+  let base = lemma;
+  if (!e) return capitalize ? capFirst(lemma) : lemma;
+  if (num === 'pl' && e.pluralDisplay) base = e.pluralDisplay;
+  else if (num === 'pl') base = e.plural;
+  else if (e.display) base = e.display; else base = lemma;
+  return capitalize ? capFirst(base) : base;
+}
+
+function capFirst(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+// Artikel-Tabellen
+const DEF_ART = {
+  m:{nom:'der', acc:'den', dat:'dem', gen:'des'},
+  f:{nom:'die', acc:'die', dat:'der', gen:'der'},
+  n:{nom:'das', acc:'das', dat:'dem', gen:'des'},
+  pl:{nom:'die', acc:'die', dat:'den', gen:'der'}
+};
+const INDEF_ART = {
+  m:{nom:'ein', acc:'einen', dat:'einem', gen:'eines'},
+  f:{nom:'eine', acc:'eine', dat:'einer', gen:'einer'},
+  n:{nom:'ein', acc:'ein', dat:'einem', gen:'eines'},
+  pl:{nom:'keine', acc:'keine', dat:'keinen', gen:'keiner'} // „indef“ plural = keine/keinen/…
+};
+
+// Adjektivendungen (stark/ gemischt/ schwach)
+const ADJ_END_STRONG = {
+  m:{nom:'er', acc:'en', dat:'em', gen:'en'},
+  f:{nom:'e',  acc:'e',  dat:'er', gen:'er'},
+  n:{nom:'es', acc:'es', dat:'em', gen:'en'},
+  pl:{nom:'e',  acc:'e',  dat:'en', gen:'er'}
+};
+const ADJ_END_MIXED = {
+  m:{nom:'er', acc:'en', dat:'en', gen:'en'},
+  f:{nom:'e',  acc:'e',  dat:'en', gen:'en'},
+  n:{nom:'es', acc:'es', dat:'en', gen:'en'},
+  pl:{nom:'en', acc:'en', dat:'en', gen:'en'}
+};
+const ADJ_END_WEAK = {
+  m:{nom:'e',  acc:'en', dat:'en', gen:'en'},
+  f:{nom:'e',  acc:'e',  dat:'en', gen:'en'},
+  n:{nom:'e',  acc:'e',  dat:'en', gen:'en'},
+  pl:{nom:'en', acc:'en', dat:'en', gen:'en'}
+};
+
+function getAdjEndingType(det){
+  if (det === 'def') return ADJ_END_WEAK;   // bestimmter Artikel → schwach
+  if (det === 'indef') return ADJ_END_MIXED;// unbestimmt → gemischt
+  return ADJ_END_STRONG;                    // ohne Artikel → stark
+}
+
+// Sehr vereinfachte Genitivbildung für m/n Singular: +s / +es
+function genitiveNounForm(lemma, gender, num, surface) {
+  if (num !== 'sg') return surface;
+  if (gender === 'm' || gender === 'n') {
+    const last = surface.slice(-1);
+    if ('sßxz'.includes(last)) return surface + 'es';
+    return surface + 's';
+  }
+  return surface;
+}
+
+function buildNP(opts){
+  // opts: {det, case, num, noun, adj[], cap}
+  const e = GERMAN_LEXICON[opts.noun];
+  if (!e) return '[? ' + opts.noun + ']';
+  const num = opts.num || 'sg';
+  const gender = (num === 'pl') ? 'pl' : e.gender; // pl als eigener „Genus“
+  const kase = opts.case || 'nom';
+  const det = opts.det || 'def';
+  const adjList = (opts.adj || []).filter(Boolean);
+
+  // Artikel
+  let art = '';
+  if (det === 'def') art = DEF_ART[gender][kase];
+  else if (det === 'indef') art = INDEF_ART[gender][kase];
+  else art = '';
+
+  // Adjektive
+  const endings = getAdjEndingType(det)[gender];
+  const adjSurface = adjList.map(a => a.trim()).filter(a=>a).map(a => a + endings[kase]).join(' ');
+
+  // Nomen
+  let nounSurface = displayForm(opts.noun, num, false);
+  if (kase === 'gen') nounSurface = genitiveNounForm(opts.noun, e.gender, num, nounSurface);
+  if (num === 'pl' && kase === 'dat' && det === 'def') {
+    // Dativ Plural benötigt oft -n, außer wenn Plural bereits auf -n oder -s endet
+    if (!/(n|s)$/i.test(nounSurface)) nounSurface += 'n';
+  }
+
+  const pieces = [art, adjSurface, nounSurface].filter(Boolean);
+  let phrase = pieces.join(' ').replace(/\s+/g,' ').trim();
+  if (opts.cap) phrase = capFirst(phrase);
+  return phrase;
+}
+
+function parseNPTag(tag){
+  // "NP:det=def;case=acc;num=sg;noun=krieger;adj=tapfer,alt;cap=0"
+  const conf = { det:'def', case:'nom', num:'sg', noun:'', adj:[], cap:0 };
+  tag.split(';').forEach(kv => {
+    const [k,vRaw] = kv.split('=');
+    const v = (vRaw||'').trim();
+    if (!k) return;
+    switch(k.trim()){
+      case 'det': conf.det = v; break;
+      case 'case': conf.case = v; break;
+      case 'num': conf.num = v; break;
+      case 'noun': conf.noun = v; break;
+      case 'adj': conf.adj = v ? v.split(',') : []; break;
+      case 'cap': conf.cap = Number(v)||0; break;
+    }
+  });
+  return conf;
+}
+
+function realiseNPs(text){
+  // Robust gegen verschachtelte Klammern im Inneren (keine weiteren \\]] zulassen)
+  return text.replace(/\[\[NP:([^\]]+)\]\]/g, (m, inner) => buildNP(parseNPTag(inner)) );
+}
+
+// =====================
+// Generator-Engine (dein bestehendes Template, leicht angepasst)
+// =====================
+const dataText = `
+template
+  [[NP:det=def;case=nom;noun=magier]] bittet euch, [[NP:det=indef;case=acc;noun=artefakt;adj=verloren]] aus [[NP:det=def;case=dat;noun=hoehle;adj=finster]] zu bergen.
+  Gerüchte über [[NP:det=zero;case=acc;noun=drache;adj=alt]] in [[NP:det=def;case=dat;noun=wald;adj=verflucht]] machen die Runde.
+  [[NP:det=def;case=nom;noun=wache;adj=korrupt]] verlangt Tribut: bringt [[NP:det=indef;case=acc;noun=relikt;adj=heilig]] nach [[NP:det=def;case=acc;noun=stadt]].
+  Eine Spur führt zu [[NP:det=def;case=dat;num=pl;noun=goblin;adj=raeuberisch]] tief im [[NP:det=def;case=dat;noun=wald]].
+
+coin_type
+  kupfer ^3
+  silber ^2
+  gold
+  platin
+
+belohnung
+  [[100-300]] {coin_type}-stücke
+  [[50-150]] goldstücke und [[NP:det=indef;case=acc;noun=artefakt;adj=rar]]
+  zuspruch [[NP:det=def;case=gen;noun=priester]] der Stadt
+
+`;
+
+// ---- Parser & Picker (aus deinem Template, + kleine Fixes) ----
+function parseInput(text) {
+  const lines = text.trim().split('\n');
+  const result = {}; let currentKey = null;
+  for (let line of lines) {
+    if (!line.trim()) continue;
+    if (!line.startsWith(' ')) { currentKey = line.trim().replace(':',''); result[currentKey] = []; }
+    else if (currentKey) {
+      const trimmed = line.trim();
+      const weightMatch = trimmed.match(/^(.+?)\s*\^(\d+)$/);
+      if (weightMatch) {
+        const item = weightMatch[1]; const weight = parseInt(weightMatch[2]);
+        for (let i=0;i<weight;i++) result[currentKey].push(item);
+      } else { result[currentKey].push(trimmed); }
+    }
+  }
+  return result;
+}
+function pick(list){ return list[Math.floor(Math.random()*list.length)]; }
+function processQuantityRanges(text){
+  return text.replace(/\[\[(\d+)-(\d+)\]\]/g,(m,min,max)=>{
+    const a=parseInt(min), b=parseInt(max); const val=Math.floor(Math.random()*(b-a+1))+a; return String(val);
+  });
+}
+function findMatchingCloseBrace(text, startIndex){ let braceCount=0; for (let i=startIndex+2;i<text.length-1;i++){
+  if (text.substr(i,2)==='{{'){ braceCount++; i++; } else if (text.substr(i,2)==='}}'){ if (braceCount===0) return i; else { braceCount--; i++; } } }
+  return -1; }
+function extractWeight(content){ const m=content.match(/\s*\^(\d+)$/); const w=m?parseInt(m[1]):1; const clean=content.replace(/\s*\^\d+$/,''); return {weight:w, cleanContent:clean}; }
+function createWeightedChoices(options, data, weight){ const choices=[]; for (let i=0;i<options.length-1;i++){ const t=data[options[i]]; choices.push(t&&t.length>0?pick(t):options[i]); }
+  const last=options[options.length-1]; const lt=data[last]; const lr=lt&&lt.length>0?pick(lt):last; for (let i=0;i<weight;i++) choices.push(lr); return choices; }
+function processDoubleBraceChoices(text, data){ let result=text, startIndex=0; while(true){ const open=result.indexOf('{{',startIndex); if (open===-1) break; const close=findMatchingCloseBrace(result,open); if (close===-1) break; const content=result.substring(open+2,close); const {weight,cleanContent}=extractWeight(content); const options=cleanContent.split('|').map(o=>o.replace(/^\{/,'').replace(/\}$/,'').trim()).filter(Boolean); if (options.length>1){ const choices=createWeightedChoices(options,data,weight); const sel=choices[Math.floor(Math.random()*choices.length)]; result=result.substring(0,open)+sel+result.substring(close+2); startIndex=open+sel.length; } else { startIndex=close+2; } } return result; }
+function processSingleBraceChoices(text, data){ return text.replace(/\{([^}]+)\}/g,(match,content)=>{ if (content.includes('|')){ const {weight,cleanContent}=extractWeight(content); const options=cleanContent.split('|').map(opt=>{ const t=opt.trim(); const q=t.match(/^"([^"]+)"$/); if (q) return q[1]; return t; }); if (options.length>1){ const choices=createWeightedChoices(options,data,weight); return choices[Math.floor(Math.random()*choices.length)]; } } return match; }); }
+function processTableReferences(text, data){ return text.replace(/\{(.*?)\}/g,(_,key)=> pick(data[key]||[''])); }
+
+function fillTemplate(template, data){
+  let result=template, iterations=0, maxIterations=10;
+  while ((result.includes('{') || result.includes('['+ '[')) && iterations<maxIterations){
+    iterations++;
+    result = processQuantityRanges(result);
+    result = processDoubleBraceChoices(result, data);
+    result = processSingleBraceChoices(result, data);
+    result = processTableReferences(result, data);
+  }
+  // NEU: NP-Realisierung nach der normalen Expansion
+  result = realiseNPs(result);
+  return result;
+}
+
+// Ensure global functions for inline onclick and early calls
+window.generateContent = function(){
+  const parsed = parseInput(dataText);
+  const templates = parsed.template || [''];
+  delete parsed.template;
+  const output = document.getElementById('output');
+  const results=[];
+  for (let i=0;i<generatorConfig.numberOfResults;i++){
+    const template = pick(templates);
+    let result = fillTemplate(template, parsed);
+    // Satzanfang groß
+    result = capFirst(result.trim());
+    results.push(result);
+  }
+  const listItems = results.map(r=>'<li>'+r+'</li>').join('');
+  const html = generatorConfig.outputFormat==='unordered' ? '<ul>'+listItems+'</ul>' :
+               generatorConfig.outputFormat==='paragraphs' ? results.map(r=>'<p>'+r+'</p>').join('') :
+               '<ol>'+listItems+'</ol>';
+  output.innerHTML = html;
+};
+
+// =====================
+// Self‑Tests (einfach, erweiterbar)
+// =====================
+function assertEqual(name, got, expected){
+  const ok = got === expected;
+  return (ok? '✅' : '❌') + ' ' + name + '\n    got: ' + (ok? got : ('"'+got+'"')) + (ok? '' : ('\n    exp: "'+expected+'"'));
+}
+
+window.runSelfTests = function(){
+  const out = [];
+  out.push(assertEqual('Akkusativ def mask + Adj', buildNP({det:'def', case:'acc', noun:'krieger', adj:['tapfer']}), 'den tapferen Krieger'));
+  out.push(assertEqual('Nominativ indef fem + Adj', buildNP({det:'indef', case:'nom', noun:'kriegerin', adj:['verwundet']}), 'eine verwundete Kriegerin'));
+  out.push(assertEqual('Dativ def Plural fem + Adj', buildNP({det:'def', case:'dat', num:'pl', noun:'wache', adj:['korrupt']}), 'den korrupten Wachen'));
+  out.push(assertEqual('Akkusativ ohne Artikel, n + 2 Adjs', buildNP({det:'zero', case:'acc', noun:'artefakt', adj:['uralt','verflucht']}), 'uraltes verfluchtes Artefakt'));
+  out.push(assertEqual('Genitiv def sg m', buildNP({det:'def', case:'gen', noun:'priester'}), 'des Priesters'));
+  out.push(assertEqual('Dativ def Plural auf -s (Goblins)', buildNP({det:'def', case:'dat', num:'pl', noun:'goblin', adj:['raeuberisch']}), 'den raeuberischen Goblins'));
+  // Additional tests
+  out.push(assertEqual('Genitiv def sg n (Artefakt)', buildNP({det:'def', case:'gen', noun:'artefakt'}), 'des Artefakts'));
+  out.push(assertEqual('Genitiv def sg m (Phönix → +es)', buildNP({det:'def', case:'gen', noun:'phoenix'}), 'des Phönixes'));
+  out.push(assertEqual('Dativ indef Plural (keinen + Adj)', buildNP({det:'indef', case:'dat', num:'pl', noun:'wache', adj:['streng']}), 'keinen strengen Wachen'));
+  out.push(assertEqual('Ohne Artikel, Plural, starker Endung', buildNP({det:'zero', case:'nom', num:'pl', noun:'goblin', adj:['wild']}), 'wilde Goblins'));
+
+  document.getElementById('tests').innerHTML = '<h3>Self‑Tests</h3><pre>' + out.join('\n') + '</pre>';
+};
+
+// Register on load AFTER globals are assigned
+window.addEventListener('load', window.generateContent);
+</script>
+
+</body>
+</html>
